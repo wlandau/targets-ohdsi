@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="" xml:lang="">
   <head>
-    <title>Target Markdown and stantargets for Bayesian model validation pipelines</title>
+    <title>Reproducible pipelines in R: {targets} and its ecosystem</title>
     <meta charset="utf-8" />
     <meta name="author" content="Will Landau" />
     <script src="index_files/header-attrs/header-attrs.js"></script>
@@ -12,7 +12,7 @@
     <textarea id="source">
 class: center, middle, inverse, title-slide
 
-# Target Markdown and stantargets for Bayesian model validation pipelines
+# Reproducible pipelines in R: {targets} and its ecosystem
 ### Will Landau
 
 ---
@@ -43,7 +43,7 @@ color: #666666;
 }
 .title-slide {
 background-color: white;
-background-image: url('images/logos.png');
+background-image: url('images/targetopia.png');
 background-repeat: no-repeat;
 background-size: 50%;
 }
@@ -191,6 +191,451 @@ There are hundreds of pipeline tools for other languages, but historically not a
 
 ---
 
+## Example targets workflow: validate a Bayesian model
+
+&lt;br&gt;
+&lt;center&gt;
+&lt;img src="./images/model-simple.png" height="250px"&gt;
+&lt;/center&gt;
+
+---
+
+## Interval-based validation study
+
+* For several independent replications:
+    * Simulate data from the prior predictive distribution.
+    * Fit the model to the simulated data using MCMC.
+    * Calculate x% posterior intervals for each scalar parameter.
+* For each of scalar parameter, roughly x% of the posterior intervals should cover the corresponding parameter draws from the joint prior.
+* 50% and 95% are common choices for x%.
+* Based on the concept of calibration ([Carpenter 2017](https://statmodeling.stat.columbia.edu/2017/04/12/bayesian-posteriors-calibrated/)).
+* Simulation-based calibration extends this idea further ([Cook et al. 2006](https://www.jstor.org/stable/27594203); [Talts et al. 2020](https://arxiv.org/abs/1804.06788)).
+
+---
+
+## Stan model
+
+```r
+data {
+  int &lt;lower = 1&gt; n;
+  vector[n] x;
+  vector[n] y;
+}
+parameters {
+  real alpha;
+  real beta;
+  real &lt;lower = 0&gt; sigma;
+}
+model {
+  y ~ normal(alpha + x * beta, sigma);
+  alpha ~ normal(0, 1);
+  beta ~ normal(0, 1);
+  sigma ~ cauchy(0, 1);
+}
+```
+
+---
+
+## Function for data generation
+
+
+```r
+simulate_data_continuous &lt;- function() {
+  alpha &lt;- rnorm(1, 0, 1)
+  beta &lt;- rnorm(1, 0, 1)
+  sigma &lt;- rhcauchy(1, 1)
+  x &lt;- rnorm(100, 1, 1) # continuous covariate
+  y &lt;- rnorm(100, alpha + x * beta, sigma)
+  sim &lt;- basename(tempfile(pattern = "sim"))
+  tibble(x = x, y = y, beta_true = beta, sim = sim)
+}
+```
+
+---
+
+## Function to fit the model
+
+
+```r
+fit_model &lt;- function(data, model_file) {
+  stan_data &lt;- list(x = data$x, y = data$y, n = nrow(data))
+  truth &lt;- data$beta_true[1]
+  model &lt;- cmdstan_model(model_file)
+  fit &lt;- model$sample(data = stan_data, refresh = 0)
+  fit$summary() %&gt;%
+    filter(variable == "beta") %&gt;%
+    mutate(beta_true = truth, cover_beta = q5 &lt; truth &amp; truth &lt; q95)
+}
+```
+
+---
+
+## Utility functions
+
+
+```r
+compile_model &lt;- function(model_file) {
+  quiet(cmdstan_model(model_file))
+  model_file
+}
+
+map_sims &lt;- function(data, model_file) {
+  data %&gt;%
+    group_by(sim) %&gt;%
+    group_modify(~quiet(fit_model(.x, model_file = model_file))) %&gt;%
+    ungroup()
+}
+
+quiet &lt;- function(code) {
+  sink(nullfile())
+  on.exit(sink())
+  suppressMessages(code)
+}
+```
+
+---
+
+## File structure
+
+
+```r
+├── run.sh
+├── run.R
+*├── _targets.R
+├── _targets/
+├── sge.tmpl
+├── R
+*│   ├── functions.R
+*│   └── utils.R
+├── stan
+│   └── model.stan
+└── report.Rmd
+```
+
+---
+
+## Setup in _targets.R
+
+
+```r
+# Beginning of _targets.R
+library(targets)
+library(tarchetypes)
+source("R/functions.R")
+source("R/utils.R")
+options(tidyverse.quiet = TRUE)
+options(clustermq.scheduler = "sge", clustermq.template = "sge.tmpl")
+tar_option_set(
+  packages = c("cmdstanr", "extraDistr", "rmarkdown", "tidyverse")
+)
+```
+
+---
+
+## Pipeline in _targets.R
+
+
+```r
+# End of _targets.R
+tar_pipeline(
+  tar_target(
+    model_file,
+    quiet(compile_model("stan/model.stan")),
+    format = "file",
+    deployment = "main"
+  ),
+  tar_target(index_batch, seq_len(25)),
+  tar_target(index_sim, seq_len(40)),
+  tar_target(
+    data_continuous,
+    map_dfr(index_sim, ~simulate_data_continuous()),
+    pattern = map(index_batch),
+    format = "fst_tbl"
+  )
+)
+```
+
+---
+
+
+## Inspect the graph
+
+
+```r
+tar_visnetwork()
+```
+
+&lt;center&gt;
+&lt;img src="./images/graph1.png" height="400px"&gt;
+&lt;/center&gt;
+
+---
+
+## Run the targets
+
+
+```r
+tar_make()
+#&gt; ● start target batch_index
+#&gt; ● built target batch_index
+#&gt; ● start target model_file
+#&gt; ● built target model_file
+#&gt; ● start branch data_continuous_f385e0ef
+#&gt; ● built branch data_continuous_f385e0ef
+#&gt; ● start branch data_continuous_0217a462
+#&gt; ● built branch data_continuous_0217a462
+#&gt; ● start branch data_continuous_a06bc09e
+#&gt; ● built branch data_continuous_a06bc09e
+#&gt; ...
+```
+
+---
+
+## Now all targets are up to date.
+
+
+```r
+tar_make()
+#&gt; ✓ skip target batch_index
+#&gt; ✓ skip target model_file
+#&gt; ✓ skip branch data_continuous_f385e0ef
+#&gt; ✓ skip branch data_continuous_0217a462
+#&gt; ✓ skip branch data_continuous_a06bc09e
+#&gt; ✓ skip branch data_continuous_c1e661c3
+#&gt; ...
+#&gt; ✓ skip pipeline
+```
+
+
+---
+
+
+## Now all targets are up to date.
+
+
+```r
+tar_visnetwork()
+```
+
+&lt;center&gt;
+&lt;img src="./images/graph2.png" height="400px"&gt;
+&lt;/center&gt;
+
+---
+
+## Inspect the data
+
+
+```r
+tar_read(data_continuous, branches = 1) # see also tar_load()
+#&gt; # A tibble: 200 x 4
+#&gt;         x       y beta_true rep            
+#&gt;     &lt;dbl&gt;   &lt;dbl&gt;     &lt;dbl&gt; &lt;chr&gt;          
+#&gt;  1  0.446  1.37      -0.870 rep3841223f956f
+#&gt;  2  2.01  -0.361     -0.870 rep3841223f956f
+#&gt;  3  1.05  -0.183     -0.870 rep3841223f956f
+#&gt;  4  0.734 -0.891     -0.870 rep3841223f956f
+#&gt;  5  0.567  1.18      -0.870 rep3841223f956f
+#&gt;  6  1.30   0.306     -0.870 rep3841223f956f
+#&gt;  7  0.649  0.0242    -0.870 rep3841223f956f
+#&gt;  8  0.678  0.793     -0.870 rep3841223f956f
+#&gt;  9  1.05   0.688     -0.870 rep3841223f956f
+#&gt; 10 -0.437  2.25      -0.870 rep3841223f956f
+#&gt; # … with 190 more rows
+```
+
+---
+
+## Add the models to the pipeline
+
+
+```r
+# _targets.R
+# setup...
+list(
+  # existing targets...
+  tar_target(
+    fit_continuous,
+    map_sims(data_continuous, model_file = model_file),
+    pattern = map(data_continuous),
+    format = "fst_tbl"
+  )
+)
+```
+
+---
+
+## Check the dependency graph
+
+
+```r
+tar_visnetwork()
+```
+
+&lt;center&gt;
+&lt;img src="./images/graph3.png" height = "400px"&gt;
+&lt;/center&gt;
+
+---
+
+## Run the models on a cluster
+
+
+```r
+tar_make_clustermq(workers = 25)
+#&gt; ✓ skip target batch_index
+#&gt; ✓ skip target model_file
+#&gt; ✓ skip branch data_continuous_f385e0ef
+#&gt; ✓ skip branch data_continuous_0217a462
+#&gt; ...
+#&gt; ● start branch fit_continuous_5f87e2ff
+#&gt; ● start branch fit_continuous_d5dfa376
+#&gt; ...
+```
+
+---
+
+## Inspect the model results
+
+
+```r
+tar_read(fit_continuous)
+#&gt; # A tibble: 8 x 13
+#&gt;   rep   variable    mean  median      sd     mad     q5     q95
+#&gt;   &lt;chr&gt; &lt;chr&gt;      &lt;dbl&gt;   &lt;dbl&gt;   &lt;dbl&gt;   &lt;dbl&gt;  &lt;dbl&gt;   &lt;dbl&gt;
+#&gt; 1 rep3… beta     -0.765  -0.765  0.0868  0.0856  -0.905 -0.619 
+#&gt; 2 rep3… beta      1.03    1.03   0.0840  0.0852   0.892  1.17  
+#&gt; 3 rep3… beta     -0.560  -0.560  0.0309  0.0306  -0.612 -0.511 
+#&gt; 4 rep3… beta      0.859   0.859  0.0302  0.0306   0.810  0.908 
+#&gt; 5 rep3… beta     -0.0980 -0.0962 0.111   0.109   -0.280  0.0792
+#&gt; 6 rep3… beta      0.462   0.463  0.0567  0.0565   0.369  0.555 
+#&gt; 7 rep3… beta      0.316   0.318  0.0848  0.0840   0.178  0.454 
+#&gt; 8 rep3… beta      0.499   0.499  0.00727 0.00709  0.486  0.511 
+#&gt; # … with 5 more variables: rhat &lt;dbl&gt;, ess_bulk &lt;dbl&gt;,
+#&gt; #   ess_tail &lt;dbl&gt;, beta_true &lt;dbl&gt;, cover_beta &lt;lgl&gt;
+```
+
+
+---
+
+## Inspect the graph
+
+
+```r
+tar_visnetwork(label = c("time", "size", "branches"))
+```
+
+&lt;center&gt;
+&lt;img src="./images/graph4.png" height = "400px"&gt;
+&lt;/center&gt;
+
+---
+
+## Add discrete data
+
+
+```r
+# functions.R
+simulate_data_discrete &lt;- function() {
+  alpha &lt;- rnorm(1, 0, 1)
+  beta &lt;- rnorm(1, 0, 1)
+  sigma &lt;- rhcauchy(1, 1)
+  x &lt;- rbinom(100, 1, 0.5) # discrete covariate
+  y &lt;- rnorm(100, alpha + x * beta, sigma)
+  sim &lt;- basename(tempfile(pattern = "sim"))
+  tibble(x = x, y = y, beta_true = beta, sim = sim)
+}
+```
+
+---
+
+## Add an R Markdown report
+
+&lt;center&gt;
+&lt;img src="./images/report.png" height = "450px"&gt;
+&lt;/center&gt;
+
+---
+
+## Add new targets
+
+
+```r
+# _targets.R
+# setup...
+list(
+  # existing targets...
+  tar_target(
+    data_discrete,
+    map_dfr(index_sim, ~simulate_data_discrete()),
+    pattern = map(index_batch),
+    format = "fst_tbl"
+  ),
+  tar_target(
+    fit_discrete,
+    map_sims(data_discrete, model_file = model_file),
+    pattern = map(data_discrete),
+    format = "fst_tbl"
+  ),
+  tar_render(report, "report.Rmd") # from tarchetypes
+)
+```
+
+---
+
+## Only the new targets run
+
+
+```r
+tar_make_clustermq(workers = 25)
+#&gt; ✓ skip target batch_index
+#&gt; ✓ skip target model_file
+#&gt; ✓ skip branch data_continuous_f385e0ef
+#&gt; ✓ skip branch data_continuous_0217a462
+#&gt; ...
+#&gt; ✓ skip branch fit_continuous_5f87e2ff
+#&gt; ✓ skip branch fit_continuous_d5dfa376
+#&gt; ...
+#&gt; ● start branch data_discrete_06241955
+#&gt; ● start branch data_discrete_88664909
+#&gt; ...
+#&gt; ● start branch fit_discrete_e31322f6
+#&gt; ● start branch fit_discrete_a2fab7f4
+#&gt; ...
+#&gt; ● start target report
+```
+
+---
+
+## Inspect the report
+
+&lt;center&gt;
+&lt;img src="./images/report2.png" height = "500px"&gt;
+&lt;/center&gt;
+
+---
+
+## Inspect the report
+
+&lt;center&gt;
+&lt;img src="./images/report3.png" height = "500px"&gt;
+&lt;/center&gt;
+
+---
+
+## Evidence of reproducibility
+
+
+```r
+tar_visnetwork()
+```
+
+&lt;center&gt;
+&lt;img src="./images/graph6.png" height = "400px"&gt;
+&lt;/center&gt;
+
+---
+
 ## Challenge
 
 * Most pipelines have a lot of user-side code.
@@ -327,7 +772,7 @@ $$
 
 * A common variant of this model uses inverse-Wishart for the covariance, which induces troublesome prior relationships among covariance components ([Alvarez et al. 2016](https://arxiv.org/abs/1408.4050)).
 * The above LKJ-based model could help refine some existing models currently used on real clinical trial data. 
-* **But first, we need to ensure the above model is implemented correctly.**
+* Goal: apply the interval-based simulation technique from the previous example to test the correctness of the implementation.
 
 ???
 
@@ -339,22 +784,6 @@ Which motivates the model you see here. A solution is to model the variances and
 
 Before using this model in the topline analysis of an actual clinical trial, we need to validate it. That includes checking all sorts of issues, one of which is the correctness of the implementation. In other words, does the Stan code accurately follow the model specification?
 
----
-
-## Interval-based validation study
-
-* For several independent replications:
-    * Simulate data from the prior predictive distribution.
-    * Fit the model to the simulated data using MCMC.
-    * Calculate x% posterior intervals for each scalar parameter.
-* For each of scalar parameter, roughly x% of the posterior intervals should cover the corresponding parameter draws from the joint prior.
-* 50% and 95% are common choices for x%.
-* Based on the concept of calibration ([Carpenter 2017](https://statmodeling.stat.columbia.edu/2017/04/12/bayesian-posteriors-calibrated/)).
-* Simulation-based calibration extends this idea further ([Cook et al. 2006](https://www.jstor.org/stable/27594203); [Talts et al. 2020](https://arxiv.org/abs/1804.06788)).
-
-???
-
-One way to do that is with calibration. The idea is to simulate thousands of datasets from the prior predictive distribution, analyze each dataset with the model, and find out how well the posterior parameter samples agree with the parameter samples from the prior. So if we compute a 50% posterior interval for each simulation, then 50% of those intervals should contain the corresponding prior draws of that parameter. Likewise for 95% intervals or whatever credible level you choose. If coverage is nominal, that's evidence that the analysis model and the data-generating model agree. In practice, I have found this exercise to uncover a lot of bugs, and I will walk through it in a moment.
 
 ---
 
@@ -520,8 +949,8 @@ And coverage looks nominal. On average, 50% of the 50% posterior intervals cover
 
 Resource | Link
 ---|---
-Slides | &lt;https://wlandau.github.io/rmedicine2021-slides/&gt;
-Slide source | &lt;https://github.com/wlandau/rmedicine2021-slides&gt;
+Slides | &lt;https://wlandau.github.io/targets-ohdsi/&gt;
+Slide source | &lt;https://github.com/wlandau/targets-ohdsi&gt;
 Pipeline report | &lt;https://wlandau.github.io/rmedicine2021-pipeline/&gt;
 Pipeline source | &lt;https://github.com/wlandau/rmedicine2021-pipeline&gt;
 `targets` | &lt;https://docs.ropensci.org/targets/&gt;
