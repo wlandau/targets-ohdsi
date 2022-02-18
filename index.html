@@ -754,6 +754,49 @@ A bit of background: Stan is a probabilistic programming language for all kinds 
 
 ---
 
+## {stantargets}: target factories for Stan 
+
+* Closely follows the function interface of `cmdstanr`: &lt;https://mc-stan.org/cmdstanr/reference/index.html&gt;.
+
+Algorithm | Single-rep multi-output | Multi-rep single-output
+---|---|---
+MCMC | `tar_stan_mcmc()     ` | `tar_stan_mcmc_rep_draws()` `tar_stan_mcmc_rep_diagnostics()` `tar_stan_mcmc_rep_summary()`
+Gen. Qty. | `tar_stan_gq()` | `tar_stan_gq_rep_draws()`  `tar_stan_gq_rep_summary()`
+Variational | `tar_stan_vb()` | `tar_stan_vb_rep_draws()`  `tar_stan_vb_rep_summary()` 
+MLE  | `tar_stan_mle()` | `tar_stan_mle_rep_draws()`  `tar_stan_mle_rep_summary()`
+Compilation | `tar_stan_compile()` | 
+Summaries | `tar_stan_summary()` | 
+
+---
+
+## `tar_stan_mcmc()` 
+
+* Run the model once.
+* Create targets for draws, summaries, and HMC/NUTS diagnostics.
+
+
+```r
+tar_visnetwork()
+```
+
+![](./images/single-rep.png)
+
+---
+
+## `tar_stan_mcmc_rep_summary()`
+
+* Run the model multiple times in batches over many randomly-generated datasets.
+* Only return posterior summaries.
+
+
+```r
+tar_visnetwork()
+```
+
+![](./images/multi-rep.png)
+
+---
+
 ## Example: Bayesian longitudinal model for clinical trials
 
 &lt;!--
