@@ -1,6 +1,6 @@
 ## Target Markdown and stantargets for Bayesian model validation pipelines
 
-The `targets` package is a pipeline toolkit for Statistics and data science in R. Pipelines with `targets` skip costly runtime for tasks that are already up to date, run the necessary computation with implicit parallel computing, and abstract files as R objects. In this way, `targets` enhances the reproducibility, scale, and maintainability of data science projects in computationally intense fields such as machine learning, Bayesian statistics, and statistical genomics. Domain-specific extensions to `targets` make it easier to write specialized pipelines, and Target Markdown leverages literate programming for pipeline specification. This talk overviews these capabilities, with an emphasis on Bayesian data analysis.
+The `targets` package is a pipeline toolkit for Statistics and data science in R. Pipelines with `targets` skip costly runtime for tasks that are already up to date, run the necessary computation with implicit parallel computing, and abstract files as R objects. In this way, `targets` enhances the reproducibility, scale, and maintainability of data science projects in computationally intense fields such as machine learning, Bayesian statistics, and statistical genomics. Domain-specific extensions to the package make it easier to write specialized pipelines, and Target Markdown leverages literate programming for pipeline specification. This talk overviews these capabilities, with an emphasis on Bayesian data analysis.
 
 ## Resources
 
